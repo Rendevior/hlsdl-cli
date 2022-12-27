@@ -1,5 +1,7 @@
-# hlsdl-cli
+<h1 align="center">hlsdl-cli</h1>
+<p align="center">
 Simple HLS playlist downloader written in Shell
+<p>
 
 # Installation
 ```sh
@@ -31,3 +33,4 @@ hlsdl-cli -o filename.mp4 -d ./.cache -q 720 "https://example.com/example.m3u8"
 - curl
 - openssl
 - ffmpeg
+- aria2
