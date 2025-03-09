@@ -14,7 +14,7 @@
 # * openssl
 # ############# #
 
-GLOB_VERSION="v1.0.1"
+GLOB_VERSION="v1.0.2"
 
 GLOB_PARENT_PID="${$}"
 GLOB_TMP_DIR=~/.ffmhls
@@ -66,36 +66,40 @@ dep_check(){
 ffmpegdler(){
     TEMP_QUAL="${3}"
     TEMP_TS_DATA_FIR="$(curl -sLfk "${1}")" || return 1
-    TEMP_QUALLIST_VID_IND="$(printf '%s' "${TEMP_TS_DATA_FIR}" | sed -nE '/#EXT-X-STREAM/!d;s_.*[0-9]+x([0-9]+).*_\1_p' | sort -nr)"
+    TEMP_QUALLIST_VID_IND="$(printf '%s' "${TEMP_TS_DATA_FIR}" | sed -E '/#EXT-X-STREAM/!d' | sort -Vr)"
     
     # Getting Specific quality
-    [ "${TEMP_QUAL}" = "high" ] && TEMP_SELC_PIX="$(printf '%s' "${TEMP_QUALLIST_VID_IND}" | head -n 1)"
-    [ "${TEMP_QUAL}" = "low" ] && TEMP_SELC_PIX="$(printf '%s' "${TEMP_QUALLIST_VID_IND}" | tail -n 1)"
-    [ -z "${TEMP_SELC_PIX}" ] && [ -n "${TEMP_QUAL}" ] && TEMP_SELC_PIX="$(printf '%s' "${TEMP_QUALLIST_VID_IND}" | grep -m 1 -i "${TEMP_QUAL}")"
-    # If quality is not specified
-    if [ -z "${TEMP_SELC_PIX}" ]; then
-        until [ -n "${TEMP_QUAL}" ]; do
-            printf '%s\n' "Pick Here by number:"
-            printf '%s\n' "${TEMP_QUALLIST_VID_IND}" | nl -w4 -s") " 
-            printf '%s' ">> "
-            read -r TEMP_QUAL
-            { [ "${TEMP_QUAL}" = "q" ] || [ "${TEMP_QUAL}" -le 0 ] ;} && die 0
-        done
-        TEMP_SELC_PIX="$(printf '%s' "${TEMP_QUALLIST_VID_IND}" | sed -n "${TEMP_QUAL}"p)"
-        [ -z "${TEMP_SELC_PIX}" ] && die 1 "Theres no quality picked, or the quality is not available"
-    fi
-    TEMP_SELC_QUAL="$(printf '%s' "${TEMP_TS_DATA_FIR}" | sed -nE "/x${TEMP_SELC_PIX}/{n;p;q}")"
-    
-    # Get Relative Path, when it is not fully sourced into stream url
-    if printf '%s' "${TEMP_SELC_QUAL}" | grep -q 'http'; then
-        BOOL_STREAM_HTTP=1
+    if ! printf '%s' "${TEMP_TS_DATA_FIR}" | grep -q '#EXTINF'; then
+        [ "${TEMP_QUAL}" = "high" ] && TEMP_SELC_PIX="$(printf '%s' "${TEMP_QUALLIST_VID_IND}" | head -n 1)"
+        [ "${TEMP_QUAL}" = "low" ] && TEMP_SELC_PIX="$(printf '%s' "${TEMP_QUALLIST_VID_IND}" | tail -n 1)"
+        [ -z "${TEMP_SELC_PIX}" ] && [ -n "${TEMP_QUAL}" ] && TEMP_SELC_PIX="$(printf '%s' "${TEMP_QUALLIST_VID_IND}" | grep -m 1 -i "${TEMP_QUAL}")"
+        # If quality is not specified
+        if [ -z "${TEMP_SELC_PIX}" ]; then
+            until [ -n "${TEMP_QUAL}" ]; do
+                printf '%s\n' "Pick Here by number:"
+                printf '%s\n' "${TEMP_QUALLIST_VID_IND}" | nl -w4 -s") " 
+                printf '%s' ">> "
+                read -r TEMP_QUAL
+                { [ "${TEMP_QUAL}" = "q" ] || [ "${TEMP_QUAL}" -le 0 ] ;} && die 0
+            done
+            TEMP_SELC_PIX="$(printf '%s' "${TEMP_QUALLIST_VID_IND}" | sed -n "${TEMP_QUAL}"p)"
+            [ -z "${TEMP_SELC_PIX}" ] && die 1 "Theres no quality picked, or the quality is not available"
+        fi
+        TEMP_SELC_QUAL="$(printf '%s' "${TEMP_TS_DATA_FIR}" | sed -nE "/${TEMP_SELC_PIX}/{n;p;q}")"
+        
+        # Get Relative Path, when it is not fully sourced into stream url
+        if printf '%s' "${TEMP_SELC_QUAL}" | grep -q 'http'; then
+            BOOL_STREAM_HTTP=1
+        else
+            TEMP_RELPATH="${1%/*}/"
+        fi
+        TEMP_AUD_PERF="$(printf '%s' "${TEMP_TS_DATA_FIR}" | sed -nE 's_^#EXT-X-MEDIA:TYPE=AUDIO.*audio-0.*URI="([^\"]*)".*_\1_p')"
+        
+        # 2nd step get the 2nd layer which is the TS files
+        TEMP_TS_DATA_SEC="$(curl -sLfk "${TEMP_RELPATH}${TEMP_SELC_QUAL}")" || return 1
     else
-        TEMP_RELPATH="${1%/*}/"
+        TEMP_TS_DATA_SEC="${TEMP_TS_DATA_FIR}"
     fi
-    TEMP_AUD_PERF="$(printf '%s' "${TEMP_TS_DATA_FIR}" | sed -nE 's_^#EXT-X-MEDIA:TYPE=AUDIO.*audio-0.*URI="([^\"]*)".*_\1_p')"
-    
-    # 2nd step get the 2nd layer which is the TS files
-    TEMP_TS_DATA_SEC="$(curl -sLfk "${TEMP_RELPATH}${TEMP_SELC_QUAL}")" || return 1
     TEMP_ENC_KEY="$(printf "%s" "${TEMP_TS_DATA_SEC}" | sed -nE 's_^#EXT-X-KEY.*URI="([^\"]*)"_\1_p')"
     if [ -n "${TEMP_ENC_KEY}" ]; then
         TEMP_DEC_KEY="$(curl -sLk "${TEMP_ENC_KEY}" | od -A n -t x1 | tr -d ' |\n')"
