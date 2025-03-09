@@ -14,14 +14,14 @@
 # * openssl
 # ############# #
 
-VERSION="v1.0.0"
+GLOB_VERSION="v1.0.1"
 
-parent_pid="${$}"
-tmp_dir=~/.ffmhls
-user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:102.0) Gecko/20100101 Firefox/102.0"
-defifs="${IFS}"
-quiet=""
-saveterm="$(stty -g)"
+GLOB_PARENT_PID="${$}"
+GLOB_TMP_DIR=~/.ffmhls
+GLOB_USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:102.0) Gecko/20100101 Firefox/102.0"
+GLOB_DEFAULT_IFS="${IFS}"
+BOOL_QUIET=""
+GLOB_SAVE_TERM="$(stty -g)"
 
 # Receive Terminal Signal
 trap 'save_terminal ; cleanup_trap ; printf "%b" "\n" ; exit 2' INT HUP
@@ -34,206 +34,217 @@ suc(){ printf "\033[38;5;2m%b\033[0m\n" "${1}" ;}
 
 # Terminal States and Traps
 cleanup_trap(){
-	for temps in "${ffmp_temp}" "${ffmp_ts}" "${ffmp_purl}"; do
-		{ [ -e "${temps}" ] || [ -d "${temps}" ] ;} && rm -rdf "${temps}"
-	done
+    for TEMP_TEMPS in "${GLOB_FFMP_TEMP}" "${GLOB_FFMP_TS}" "${GLOB_FFMP_PURL}"; do
+        { [ -e "${TEMP_TEMPS}" ] || [ -d "${TEMP_TEMPS}" ] ;} && rm -rdf "${TEMP_TEMPS}"
+    done
 }
 
 save_terminal(){
-	printf "\033[?25h"	# Show Cursor
-	printf "\033[0m"	# Normal State of Colors / Remove Text colors
-	stty "${saveterm}"	# Rollback stty settings
-	IFS="${defifs}"		# Set to default IFS
+    printf "\033[?25h"      # Show Cursor
+    printf "\033[0m"        # Normal State of Colors / Remove Text colors
+    stty "${GLOB_SAVE_TERM}"        # Rollback stty settings
+    IFS="${GLOB_DEFAULT_IFS}"       # Set to default IFS
 }
 
 sanitize_terminal(){
-	printf "\033[%sA" "${1}"
-	[ -n "${4}" ] && printf "\033[%sB" "${4}"
-	printf "%${2}s" | sed "s_[[:space:]]_\n$(printf "\033[2K\r")_g"
-	[ -n "${3}" ] && printf "\033[%sA" "${3}"
+    printf "\033[%sA" "${1}"
+    [ -n "${4}" ] && printf "\033[%sB" "${4}"
+    printf "%${2}s" | sed "s_[[:space:]]_\n$(printf "\033[2K\r")_g"
+    [ -n "${3}" ] && printf "\033[%sA" "${3}"
 }
 
 dep_check(){
-	for deppack; do
-		command -v "${deppack}" >/dev/null || { err "Program \"${deppack}\" is not installed." ; is_err="1" ;}
-	done
-	[ "${is_err}" = "1" ] && die 1
+    for TEMP_DEPPACK; do
+        command -v "${TEMP_DEPPACK}" >/dev/null || { err "Program \"${TEMP_DEPPACK}\" is not installed." ; BOOL_IS_ERR="1" ;}
+    done
+    [ "${BOOL_IS_ERR}" = "1" ] && die 1
 }
 
 # Main Function
 # Needed Args:
 # ffmpegdler "{url}" "{out_file}" "{quality}" "{nconnection}"
 ffmpegdler(){
-	qual="${3}"
-	ts_data_fir="$(curl -sLfk "${1}")" || return 1
-	quallist_vid_ind="$(printf '%s' "${ts_data_fir}" | sed -nE '/#EXT-X-STREAM/!d;s_.*x([0-9]*),.*_\1_p' | sort -nr)"
-	
-	# Getting Specific quality
-	[ "${qual}" = "high" ] && selc_pix="$(printf '%s' "${quallist_vid_ind}" | head -n 1)"
-	[ "${qual}" = "low" ] && selc_pix="$(printf '%s' "${quallist_vid_ind}" | tail -n 1)"
-	[ -z "${selc_pix}" ] && [ -n "${qual}" ] && selc_pix="$(printf '%s' "${quallist_vid_ind}" | grep -m 1 -i "${qual}")"
-	# If quality is not specified
-	if [ -z "${selc_pix}" ]; then
-		until [ -n "${qual}" ]; do
-			printf '%s\n' "Pick Here by number:"
-			printf '%s\n' "${quallist_vid_ind}" | nl -w4 -s") " 
-			printf '%s' ">> "
-			read -r qual
-			{ [ "${qual}" = "q" ] || [ "${qual}" -le 0 ] ;} && die 0
-		done
-		selc_pix="$(printf '%s' "${quallist_vid_ind}" | sed -n "${qual}"p)"
-		[ -z "${selc_pix}" ] && die 1 "Theres no quality picked, or the quality is not available"
-	fi
-	selc_qual="$(printf '%s' "${ts_data_fir}" | sed -nE "/x${selc_pix}/{n;p;q}")"
-	
-	# Get Relative Path, when it is not fully sourced into stream url
-	printf '%s' "${selc_qual}" | grep -q 'http' || relpath="${1%/*}/"
-	aud_perf="$(printf '%s' "${ts_data_fir}" | sed -nE 's_^#EXT-X-MEDIA:TYPE=AUDIO.*audio-0.*URI="([^\"]*)".*_\1_p')"
-	
-	# 2nd step get the 2nd layer which is the TS files
-	ts_data_sec="$(curl -sLfk "${relpath}${selc_qual}")" || return 1
-	enc_key="$(printf "%s" "${ts_data_sec}" | sed -nE 's_^#EXT-X-KEY.*URI="([^\"]*)"_\1_p')"
-	if [ -n "${enc_key}" ]; then
-		dec_key="$(curl -sLk "${enc_key}" | od -A n -t x1 | tr -d ' |\n')"
-		enc_iv="$(printf "%s" "${ts_data_sec}" | sed -nE 's_^#EXT-X-IV.*URI="([^\"]*)"_\1_p')"
-		[ -z "${enc_iv}" ] && dec_iv="$(openssl rand -hex 16)" || dec_iv="$(curl -sLk "${enc_iv}" | od -A n -t x1 | tr -d ' |\n')"
-	fi
-	pieces_data="$(printf "%s" "${ts_data_sec}" | sed '/^#/d')"
-	if printf '%s' "${pieces_data}" | grep -q 'http'; then
-		unset relpath
-	else
-		relpath="${1%/*}/"
-	fi
-	total_pieces="$(printf '%s\n' "${pieces_data}" | awk 'BEGIN{c=0} //{c++} END{print c}')"
-	printf '%s' "${pieces_data}" | awk -v "r=${relpath}" '{printf("%s%s\n  %s%04d%s\n", r, $1, "out=", NR, ".ts")}' > "${ffmp_purl}"
-	custom_aria -x "${4}" -s "${4}" -j "${4}" -i "${ffmp_purl}" -d "${ffmp_temp}" --console-log-level="error" --check-certificate="false" --download-result="hide" --summary-interval="0"
-	if [ -n "${enc_key}" ]; then
-		for i in "${ffmp_temp}"/*; do
-			: "$((in+=1))"
-			[ "${quiet}" = "1" ] || progbar "${in}" "${total_pieces}" "Decrypting..."
-			openssl aes-128-cbc -d -K "${dec_key}" -iv "${dec_iv}" -nopad < "${i}" >> "${ffmp_ts}"
-		done
-	else
-		cat "${ffmp_temp}"/* >> "${ffmp_ts}"
-	fi
-	# Check if audio was seperated to ts streams to merge it
-	if [ -n "${aud_perf}" ]; then
-		ffmpeg -hide_banner -loglevel error -i "${aud_perf}" -i "${ffmp_ts}" -c copy "${2}"
-	else
-		ffmpeg -hide_banner -loglevel error -i "${ffmp_ts}" -c copy "${2}"
-	fi
-	cleanup_trap
-	# Unset all variables for reusing function
-	unset ts_data_fir quallist_vid_ind selc_pix selc_qual relpath ts_data_sec enc_key dec_key enc_iv dec_iv pieces_data total_pieces
-	return 0
+    TEMP_QUAL="${3}"
+    TEMP_TS_DATA_FIR="$(curl -sLfk "${1}")" || return 1
+    TEMP_QUALLIST_VID_IND="$(printf '%s' "${TEMP_TS_DATA_FIR}" | sed -nE '/#EXT-X-STREAM/!d;s_.*[0-9]+x([0-9]+).*_\1_p' | sort -nr)"
+    
+    # Getting Specific quality
+    [ "${TEMP_QUAL}" = "high" ] && TEMP_SELC_PIX="$(printf '%s' "${TEMP_QUALLIST_VID_IND}" | head -n 1)"
+    [ "${TEMP_QUAL}" = "low" ] && TEMP_SELC_PIX="$(printf '%s' "${TEMP_QUALLIST_VID_IND}" | tail -n 1)"
+    [ -z "${TEMP_SELC_PIX}" ] && [ -n "${TEMP_QUAL}" ] && TEMP_SELC_PIX="$(printf '%s' "${TEMP_QUALLIST_VID_IND}" | grep -m 1 -i "${TEMP_QUAL}")"
+    # If quality is not specified
+    if [ -z "${TEMP_SELC_PIX}" ]; then
+        until [ -n "${TEMP_QUAL}" ]; do
+            printf '%s\n' "Pick Here by number:"
+            printf '%s\n' "${TEMP_QUALLIST_VID_IND}" | nl -w4 -s") " 
+            printf '%s' ">> "
+            read -r TEMP_QUAL
+            { [ "${TEMP_QUAL}" = "q" ] || [ "${TEMP_QUAL}" -le 0 ] ;} && die 0
+        done
+        TEMP_SELC_PIX="$(printf '%s' "${TEMP_QUALLIST_VID_IND}" | sed -n "${TEMP_QUAL}"p)"
+        [ -z "${TEMP_SELC_PIX}" ] && die 1 "Theres no quality picked, or the quality is not available"
+    fi
+    TEMP_SELC_QUAL="$(printf '%s' "${TEMP_TS_DATA_FIR}" | sed -nE "/x${TEMP_SELC_PIX}/{n;p;q}")"
+    
+    # Get Relative Path, when it is not fully sourced into stream url
+    if printf '%s' "${TEMP_SELC_QUAL}" | grep -q 'http'; then
+        BOOL_STREAM_HTTP=1
+    else
+        TEMP_RELPATH="${1%/*}/"
+    fi
+    TEMP_AUD_PERF="$(printf '%s' "${TEMP_TS_DATA_FIR}" | sed -nE 's_^#EXT-X-MEDIA:TYPE=AUDIO.*audio-0.*URI="([^\"]*)".*_\1_p')"
+    
+    # 2nd step get the 2nd layer which is the TS files
+    TEMP_TS_DATA_SEC="$(curl -sLfk "${TEMP_RELPATH}${TEMP_SELC_QUAL}")" || return 1
+    TEMP_ENC_KEY="$(printf "%s" "${TEMP_TS_DATA_SEC}" | sed -nE 's_^#EXT-X-KEY.*URI="([^\"]*)"_\1_p')"
+    if [ -n "${TEMP_ENC_KEY}" ]; then
+        TEMP_DEC_KEY="$(curl -sLk "${TEMP_ENC_KEY}" | od -A n -t x1 | tr -d ' |\n')"
+        TEMP_ENC_IV="$(printf "%s" "${TEMP_TS_DATA_SEC}" | sed -nE 's_^#EXT-X-IV.*URI="([^\"]*)"_\1_p')"
+        [ -z "${TEMP_ENC_IV}" ] && TEMP_DEC_IV="$(openssl rand -hex 16)" || TEMP_DEC_IV="$(curl -sLk "${TEMP_ENC_IV}" | od -A n -t x1 | tr -d ' |\n')"
+    fi
+    TEMP_PIECES_DATA="$(printf "%s" "${TEMP_TS_DATA_SEC}" | sed '/^#/d')"
+    if printf '%s' "${TEMP_PIECES_DATA}" | grep -q 'http'; then
+        unset TEMP_RELPATH
+    else
+        if [ "${BOOL_STREAM_HTTP}" == 1 ]; then
+            TEMP_RELPATH="${TEMP_SELC_QUAL%/*}/"
+        else
+            TEMP_RELPATH="${1%/*}/"
+        fi
+    fi
+    TEMP_TOTAL_PIECES="$(printf '%s\n' "${TEMP_PIECES_DATA}" | awk 'BEGIN{c=0} //{c++} END{print c}')"
+    printf '%s' "${TEMP_PIECES_DATA}" | awk -v "r=${TEMP_RELPATH}" '{printf("%s%s\n  %s%04d%s\n", r, $1, "out=", NR, ".ts")}' > "${GLOB_FFMP_PURL}"
+    custom_aria -x "${4}" -s "$((${4} + 3))" -j "${4}" -i "${GLOB_FFMP_PURL}" -d "${GLOB_FFMP_TEMP}" --console-log-level="error" --check-certificate="false" --download-result="hide" --summary-interval="0"
+    if [ -n "${TEMP_ENC_KEY}" ]; then
+        for TEMP_I in "${GLOB_FFMP_TEMP}"/*; do
+            : "$((TEMP_IN+=1))"
+            [ "${BOOL_QUIET}" = "1" ] || progbar "${TEMP_IN}" "${TEMP_TOTAL_PIECES}" "Decrypting..."
+            openssl aes-128-cbc -d -K "${TEMP_DEC_KEY}" -iv "${TEMP_DEC_IV}" -nopad < "${TEMP_I}" >> "${GLOB_FFMP_TS}"
+        done
+    else
+        [ "${BOOL_QUIET}" = "1" ] || inf "Appending..."
+        cat "${GLOB_FFMP_TEMP}"/* >> "${GLOB_FFMP_TS}"
+    fi
+    # Check if audio was seperated to ts streams to merge it
+    [ "${BOOL_QUIET}" = "1" ] || inf "Encoding..."
+    if [ -n "${TEMP_AUD_PERF}" ]; then
+        ffmpeg -hide_banner -loglevel error -i "${TEMP_AUD_PERF}" -i "${GLOB_FFMP_TS}" -c copy "${2}"
+    else
+        ffmpeg -hide_banner -loglevel error -i "${GLOB_FFMP_TS}" -c copy "${2}"
+    fi
+    cleanup_trap
+    # Unset all variables for reusing function
+    unset TEMP_TS_DATA_FIR TEMP_QUALLIST_VID_IND TEMP_SELC_PIX TEMP_SELC_QUAL TEMP_RELPATH TEMP_TS_DATA_SEC TEMP_ENC_KEY TEMP_DEC_KEY TEMP_ENC_IV TEMP_DEC_IV TEMP_PIECES_DATA TEMP_TOTAL_PIECES
+    return 0
 }
 
 custom_aria(){
-	[ -z "${header}" ] || set -- "${@}" --header="${header}"
-	[ -z "${user_agent}" ] || set -- "${@}" --user-agent="${user_agent}"
-	[ -z "${cust_referer}" ] || set -- "${@}" --referer="${cust_referer}"
-	[ "${quiet}" = "1" ] && set -- "${@}" --quiet true
-	aria2c "${@}"
+    [ -z "${GLOB_HEADER}" ] || set -- "${@}" ${GLOB_HEADER}
+    [ -z "${GLOB_USER_AGENT}" ] || set -- "${@}" --user-agent="${GLOB_USER_AGENT}"
+    [ -z "${GLOB_CUST_REFERER}" ] || set -- "${@}" --referer="${GLOB_CUST_REFERER}"
+    [ "${BOOL_QUIET}" = "1" ] && set -- "${@}" --quiet true
+    aria2c "${@}"
+    printf '\n'
 }
 
 progbar(){
-	prog="$(( ${1} * 100 / ${2} * 100 / 100 ))"
-	done="$(( (prog * 4) / 10 ))" left="$(( 40 - done ))"
-	fill="$(printf "\033[7m\033[38;5;$(( (done % 103 / 20) + 101 ))m%${done}s\033[0m")" empty="$(printf "%${left}s")"
-	printf '\033[2K\r%s — %s : %s' "¦${fill}${empty}¦" "${prog}%" "${3}"
-	unset prog "done" left fill empty
+    TEMP_PROG="$(( ${1} * 100 / ${2} * 100 / 100 ))"
+    TEMP_DONE="$(( (TEMP_PROG * 4) / 10 ))" TEMP_LEFT="$(( 40 - TEMP_DONE ))"
+    TEMP_FILL="$(printf "\033[7m\033[38;5;$(( (TEMP_DONE % 103 / 20) + 101 ))m%${TEMP_DONE}s\033[0m")" TEMP_EMPTY="$(printf "%${TEMP_LEFT}s")"
+    printf '\033[2K\r%s — %s : %s' "¦${TEMP_FILL}${TEMP_EMPTY}¦" "${TEMP_PROG}%" "${3}"
+    unset TEMP_PROG TEMP_DONE TEMP_LEFT TEMP_FILL TEMP_EMPTY
 }
 
 show_help(){
-		printf '%b\n' "A super-easy tool to download HLS files with muti-threaded downloads
-		
+    printf '%b\n' "A super-easy tool to download HLS files with muti-threaded downloads
+                
  Usage:
    ${0##*/} [-z] [-u <user-agent>] [-r <referer>] [-c <connections>] [-q <quality>] [-o <filename>] [URL]
    ${0##*/} -v | -h
-		
+                
  Options:
-   -v\t\t\t\t: Print Version and Exit
-   -h\t\t\t\t: Print Help
-   -z\t\t\t\t: Supress output (only shows errors)
-   -q [high|low]\t\t: Choose specific Quality
-   -u, --user-agent=[useragent]\t: Set an User-Agent Header
-   -r, --referer=[referer]\t: Set an HTTP Referer Header
-   -o [filename]\t\t: Output filename
-   -d [dir]\t\t\t: Cache to specific directory (default: ~/.ffmhls)
-   -c [N]\t\t\t: Set number of connection will be used for downloading
-   --header=[headers]\t\t: Set a custom HTTP Headers for request
-	
+   -v                            : Print Version and Exit
+   -h                            : Print Help
+   -z                            : Supress output (only shows errors)
+   -q [high|low|[n]]             : Choose specific Quality
+   -u, --user-agent=[useragent]  : Set an User-Agent Header
+   -r, --referer=[referer]       : Set an HTTP Referer Header
+   -o [filename]                 : Output filename
+   -d [dir]                      : Cache to specific directory (default: ~/.ffmhls)
+   -c [N]                        : Set number of connection will be used for downloading
+   --header=[headers]            : Set a custom HTTP Headers for request (can be used repeatedly)
+        
 More info: <https://github.com/Rendevior/hlsdl-cli/>."
 }
 
 arg_parser(){
-	while getopts ":vhzq:d:u:r:o:c:-:" opt; do
-		case "${opt}" in
-			v)	printf '%s\n' "Version: ${VERSION}" && exit 0	;;
-			h)	show_help && exit 0	;;
-			z)	quiet="1"	;;
-			q)	quality="${OPTARG}"	;;
-			d)
-				tmp_dir="${OPTARG}"
-				[ -d "${tmp_dir}" ] || die 1 "Directory \"${tmp_dir}\" doesn't exist"
-				;;
-			u)	user_agent="${OPTARG:-"${user_agent}"}"	;;
-			r)	cust_referer="${OPTARG:-"${cust_referer}"}"	;;
-			o)	output_file="${OPTARG}"	;;
-			c)	connections="${OPTARG}"	;;
-			-)
-				case "${OPTARG}" in
-					header)
-						header="${OPTARG##header=}"
-						;;
-					user-agent)
-						[ -z "${OPTARG}" ] || user_agent="${OPTARG##user-agent=}"
-						;;
-					referer)
-						[ -z "${OPTARG}" ] || cust_referer="${OPTARG##referer=}"
-						;;
-					*)
-						err "[--${OPTARG}]: Illegal Option"
-						show_help
-						exit 1
-						;;
-				esac
-				;;
-			\?)
-				err "[-${OPTARG}]: is not valid Argument"
-				show_help
-				exit 1
-				;;
-			:)
-				err "[-${OPTARG}]: Argument must have a Value"
-				show_help
-				exit 1
-				;;
-		esac
-	done
-	shift "$((OPTIND - 1))"
-	[ -z "${output_file}" ] && die 1 "Output file must be specified"
-	[ -z "${cust_referer}" ] && cust_referer="${*}"
-	spec_url="${*}"
-	[ -z "${spec_url}" ] && die 1 "URL must be specified"
+    while getopts ":vhzq:d:u:r:o:c:-:" TEMP_OPT; do
+        case "${TEMP_OPT}" in
+            v)  printf '%s\n' "Version: ${GLOB_VERSION}" && exit 0      ;;
+            h)  show_help && exit 0     ;;
+            z)  BOOL_QUIET="1"  ;;
+            q)  TEMP_QUALITY="${OPTARG}"        ;;
+            d)
+                GLOB_TMP_DIR="${OPTARG}"
+                [ -d "${GLOB_TMP_DIR}" ] || die 1 "Directory \"${GLOB_TMP_DIR}\" doesn't exist"
+                ;;
+            u)  GLOB_USER_AGENT="${OPTARG:-"${GLOB_USER_AGENT}"}"       ;;
+            r)  GLOB_CUST_REFERER="${OPTARG:-"${GLOB_CUST_REFERER}"}"   ;;
+            o)  TEMP_OUTPUT_FILE="${OPTARG}"    ;;
+            c)  TEMP_CONNECTIONS="${OPTARG}"    ;;
+            -)
+                case "${OPTARG}" in
+                    header)
+                        GLOB_HEADER+="--${OPTARG} "
+                        ;;
+                    user-agent)
+                        [ -z "${OPTARG}" ] || GLOB_USER_AGENT="${OPTARG##user-agent=}"
+                        ;;
+                    referer)
+                        [ -z "${OPTARG}" ] || GLOB_CUST_REFERER="${OPTARG##referer=}"
+                        ;;
+                    *)
+                        err "[--${OPTARG}]: Illegal Option"
+                        show_help
+                        exit 1
+                        ;;
+                esac
+                ;;
+            \?)
+                err "[-${OPTARG}]: is not valid Argument"
+                show_help
+                exit 1
+                ;;
+            :)
+                err "[-${OPTARG}]: Argument must have a Value"
+                show_help
+                exit 1
+                ;;
+        esac
+    done
+    shift "$((OPTIND - 1))"
+    [ -z "${TEMP_OUTPUT_FILE}" ] && die 1 "Output file must be specified"
+    [ -z "${GLOB_CUST_REFERER}" ] && GLOB_CUST_REFERER="${*}"
+    TEMP_SPEC_URL="${*}"
+    [ -z "${TEMP_SPEC_URL}" ] && die 1 "URL must be specified"
 }
 
 dep_check sed grep curl ffmpeg aria2c openssl
 arg_parser "${@}"
 
 # FFmpeg Logs and Temps
-ffmp_temp="${tmp_dir}/${parent_pid}.piece"
-ffmp_purl="${tmp_dir}/${parent_pid}.pieceurl"
-ffmp_ts="${tmp_dir}/${parent_pid}.tmpvid.ts"
+GLOB_FFMP_TEMP="${GLOB_TMP_DIR}/${GLOB_PARENT_PID}.piece"
+GLOB_FFMP_PURL="${GLOB_TMP_DIR}/${GLOB_PARENT_PID}.pieceurl"
+GLOB_FFMP_TS="${GLOB_TMP_DIR}/${GLOB_PARENT_PID}.tmpvid.ts"
 
 # Creating DIRs for Temps
-[ -d "${tmp_dir}" ] || { mkdir "${tmp_dir}" ; chmod 0700 "${tmp_dir}" ;}
-[ -d "${ffmp_temp}" ] || { mkdir "${ffmp_temp}" ; chmod 0700 "${ffmp_temp}" ;}
+[ -d "${GLOB_TMP_DIR}" ] || { mkdir "${GLOB_TMP_DIR}" ; chmod 0700 "${GLOB_TMP_DIR}" ;}
+[ -d "${GLOB_FFMP_TEMP}" ] || { mkdir "${GLOB_FFMP_TEMP}" ; chmod 0700 "${GLOB_FFMP_TEMP}" ;}
 
-ffmpegdler "${spec_url}" "${output_file}" "${quality}" "${connections:-8}"
-exit_code="$?"
-if [ "${exit_code}" -gt 0 ]; then
-	die "${exit_code}" "\rFailed to download stream due to errors"
+ffmpegdler "${TEMP_SPEC_URL}" "${TEMP_OUTPUT_FILE}" "${TEMP_QUALITY}" "${TEMP_CONNECTIONS:-8}"
+GLOB_EXIT_CODE="$?"
+if [ "${GLOB_EXIT_CODE}" -gt 0 ]; then
+    die "${GLOB_EXIT_CODE}" "\rFailed to download stream due to errors"
 else
-	[ "${quiet}" = "1" ] || suc "\rDownload Success!"
+    [ "${BOOL_QUIET}" = "1" ] || suc "\rDownload Success!"
 fi
